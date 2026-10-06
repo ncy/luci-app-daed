@@ -46,7 +46,7 @@ include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 GO_PKG_BUILD_VARS+= \
-	GOFLAGS="-trimpath -buildvcs=false -pgo=auto"
+	GOFLAGS="-trimpath -buildvcs=false -pgo=auto -mod=mod"
 
 GO_PKG_TARGET_VARS+= \
 	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static -Wl,-s" \
@@ -63,8 +63,7 @@ define Package/daed
   $(call Package/daed/Default)
   TITLE:=A Modern Dashboard For dae
   DEPENDS:=$(GO_ARCH_DEPENDS) \
-    +ca-bundle +kmod-sched-core +kmod-sched-bpf \
-    +kmod-veth +v2ray-geoip +v2ray-geosite \
+    +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-veth \
     +@KERNEL_XDP_SOCKETS \
     +DAED_USE_VMLINUX_BTF:vmlinux-btf
 endef
@@ -94,6 +93,7 @@ define Package/daed/conffiles
 /etc/config/daed
 endef
 
+LOYAL_GEO_URL:=https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download
 NODE_VERSION:=v24.12.0
 NODE_DIST:=node-$(NODE_VERSION)-linux-x64
 NODE_URL:=https://nodejs.org/dist/$(NODE_VERSION)/$(NODE_DIST).tar.xz
@@ -103,18 +103,18 @@ define Build/Prepare
 		rm -rf $(DAED_BUILD_DIR) ; \
 		mkdir -p $(DAED_BUILD_DIR) ; \
 		$(TAR) --strip-components=1 -C $(DAED_BUILD_DIR) -xzf $(DL_DIR)/$(PKG_NAME)-$(PKG_VERSION).tar.gz ; \
+		rm -rf $(PKG_BUILD_DIR) ; \
 		git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) && \
 			git -C $(PKG_BUILD_DIR) checkout $(WING_HASH_SHORT) ; \
 		rm -rf $(PKG_BUILD_DIR)/dae-core ; \
 		git clone https://github.com/daeuniverse/dae $(PKG_BUILD_DIR)/dae-core && \
 			git -C $(PKG_BUILD_DIR)/dae-core checkout $(CORE_HASH_SHORT) ; \
+		export PATH="$(STAGING_DIR_HOSTPKG)/lib/go-1.26/bin:$$$$PATH" ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
 			git submodule update --init ; \
-			go get -u=patch ; \
 			go mod tidy ; \
 		popd ; \
 		pushd $(PKG_BUILD_DIR) ; \
-			go get -u=patch ; \
 			go mod tidy ; \
 			wget -qO default.pgo "https://github.com/QiuSimons/luci-app-dae/raw/refs/heads/kix/dae/pprof/default.pgo" ; \
 		popd ; \
@@ -122,6 +122,8 @@ define Build/Prepare
 		wget -qO - "$(NODE_URL)" | tar -xJ -C $(DAED_BUILD_DIR)/.node_tmp --strip-components=1 ; \
 		export PATH="$(DAED_BUILD_DIR)/.node_tmp/bin:$$$$PATH" ; \
 		export XDG_CONFIG_HOME="$(DAED_BUILD_DIR)/.node_tmp/config" ; \
+		wget -qO $(PKG_BUILD_DIR)/geoip.dat "$(LOYAL_GEO_URL)/geoip.dat" ; \
+		wget -qO $(PKG_BUILD_DIR)/geosite.dat "$(LOYAL_GEO_URL)/geosite.dat" ; \
 		npm install -g pnpm ; \
 		pushd $(DAED_BUILD_DIR) ; \
 			pnpm install ; \
@@ -166,6 +168,9 @@ define Build/Compile
 		go generate ./control/control.go ; \
 		go generate ./trace/trace.go ; \
 		popd ; \
+		pushd $(PKG_BUILD_DIR) ; \
+		go mod tidy ; \
+		popd ; \
 	)
 	$(call GoPackage/Build/Compile)
 endef
@@ -180,6 +185,19 @@ define Package/daed/install
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(CURDIR)/files/daed.init $(1)/etc/init.d/daed
+	$(INSTALL_BIN) $(CURDIR)/files/daed.init $(1)/etc/init.d/daed
+
+	$(INSTALL_DIR) $(1)/usr/share/v2ray
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/geoip.dat $(1)/usr/share/v2ray/geoip.dat
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/geosite.dat $(1)/usr/share/v2ray/geosite.dat
+
+	$(INSTALL_DIR) $(1)/usr/share/dae
+	ln -sf /usr/share/v2ray/geoip.dat $(1)/usr/share/dae/geoip.dat
+	ln -sf /usr/share/v2ray/geosite.dat $(1)/usr/share/dae/geosite.dat
+
+	$(INSTALL_DIR) $(1)/etc/daed
+	ln -sf /usr/share/v2ray/geoip.dat $(1)/etc/daed/geoip.dat
+	ln -sf /usr/share/v2ray/geosite.dat $(1)/etc/daed/geosite.dat
 endef
 
 $(eval $(call GoBinPackage,daed))
